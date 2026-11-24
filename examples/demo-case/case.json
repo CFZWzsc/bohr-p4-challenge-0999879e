@@ -1,0 +1,20 @@
+{
+  "case_id": "demo-manuscript-structure-01",
+  "output_contract": {
+    "issues": "array",
+    "summary": "object",
+    "verdict": "string"
+  },
+  "manuscript": {
+    "Abstract": "In a single-centre cohort, 120 adults with chronic fatigue were followed for 18 months. A structured exercise programme reduced symptom scores by 32% compared with usual care.",
+    "Introduction": "Chronic fatigue is common in primary care. Exercise is widely recommended for fatigue management [3]. We aimed to test whether a structured exercise programme reduces symptom scores in adults with chronic fatigue.",
+    "Methods": "We enrolled 120 adults in a prospective cohort; every participant received the structured exercise programme. Symptom scores were measured at baseline and at 12 months. Baseline and follow-up scores were compared with a t test.",
+    "Results": "Mean symptom scores fell by 32% from baseline (p = 0.01). No participant withdrew.",
+    "Discussion": "This proves that structured exercise works.",
+    "Conclusion": "Structured exercise reduces symptom scores in adults with chronic fatigue."
+  },
+  "references": [
+    {"id": 1, "title": "Exercise therapy in chronic fatigue: a cohort study"},
+    {"id": 2, "title": "Measuring fatigue severity in primary care"}
+  ]
+}
