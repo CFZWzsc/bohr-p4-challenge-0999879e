@@ -13,6 +13,20 @@ description: Use when a manuscript must be audited for overall quality and struc
 
 **不适用**：查重、语言润色、投稿排版、数据重分析、替审稿人下录用结论。
 
+## Quickstart
+
+包内自带一个合成演示案例，可直接跑通：
+
+```powershell
+python scripts/run_skill.py --case examples/demo-case/case.json --out "$env:TEMP\demo_0999879e\result.json" --work "$env:TEMP\demo_0999879e\work"
+```
+
+- 演示输入：`examples/demo-case/case.json`，6 章节合成稿件（摘要写 18 个月、方法写 12 个月，讨论含无引用强断言 "This proves…"）。
+- 输出：`$env:TEMP\demo_0999879e\result.json`，`status=success`，7 条 findings（1 high / 5 medium / 1 low），`verdict.decision=major_revision`。
+- `output_contract` 的 `issues`、`summary`、`verdict` 三个键均非空；同一输入连续两次运行的 result.json 字节一致。
+
+> 案例文本为合成内容，不代表任何真实论文或官方评测数据。
+
 ## 输入
 
 | 输入 | 说明 |
