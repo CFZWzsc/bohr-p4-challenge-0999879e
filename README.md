@@ -15,10 +15,12 @@ answers, private data or credentials are included.
 
 | File |
 |------|
+| `RUBRIC.md` |
 | `SKILL.md` |
 | `docs/ERROR_HANDLING.md` |
 | `examples/demo-case/case.json` |
 | `examples/quickstart.md` |
+| `references/gain-ablation.md` |
 | `references/output-contract.md` |
 | `references/peer-review-checklist.md` |
 | `scripts/review_core.py` |
