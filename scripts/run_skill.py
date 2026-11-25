@@ -186,6 +186,48 @@ def issue(facet, severity, section, index, quote, finding, evidence, revision):
             "quote": quote[:300], "finding": finding, "evidence": evidence, "recommendation": revision}
 
 
+NORMS_ITEMS = (
+    ("data_availability", r"data availability|available (on|upon) request|数据可用性|数据获取"),
+    ("ethics_statement", r"ethic\w*|irb|institutional review|伦理|审查批件"),
+    ("conflict_of_interest", r"conflict of interest|competing interest|利益冲突"),
+    ("funding", r"funding|grant|supported by|基金|资助"),
+)
+# 六个检查类别的固定顺序与对应检查项/问题族，用于完整性覆盖矩阵。
+COVERAGE_MAP = (
+    ("fact_check", "事实核验", ("abstract_conclusion_alignment", "numeric_consistency"), ("factual_consistency",)),
+    ("citation_support", "引用支持", ("citation_integrity",), ("citation_support",)),
+    ("method_design", "方法设计", ("methods_sample_size", "methods_controls"), ("methods_reporting",)),
+    ("statistical_reporting", "统计报告", ("methods_statistics",), ("statistical_reporting",)),
+    ("argument_chain", "论证链", (), ("argument_chain",)),
+    ("academic_norms", "学术规范", ("norms_data_availability", "norms_ethics_statement",
+                                    "norms_conflict_of_interest", "norms_funding"), ("academic_norms",)),
+)
+
+
+FACET_OF_CHECK = {name: facets[0] for _, _, names, facets in COVERAGE_MAP for name in names}
+
+
+def build_coverage(checks, findings, norms_applicable):
+    present = {check.get("check") for check in checks}
+    rows = []
+    for category, label, check_names, facets in COVERAGE_MAP:
+        hits = [item for item in findings if item.get("facet") in facets]
+        ran = any(name in present for name in check_names) or category == "argument_chain"
+        if category == "academic_norms" and not norms_applicable:
+            ran = False
+        if hits:
+            status = "finding"
+        elif ran:
+            status = "checked_no_issue"
+        else:
+            status = "not_checked"
+        rows.append({"category": category, "label": label, "status": status, "findings": len(hits),
+                     "severity_max": max([item.get("severity") for item in hits],
+                                         key=lambda s: ("low", "medium", "high").index(s)) if hits else None,
+                     "checks": [name for name in check_names if name in present]})
+    return rows
+
+
 def build_payload(case, task_text):
     manuscript = pick(case, ("manuscript", "paper", "text", "document", "article", "content"))
     if not manuscript:
@@ -273,6 +315,18 @@ def build_payload(case, task_text):
                                       "no matching pattern in the methods section",
                                       "Report %s explicitly." % item.replace("_", " ")))
 
+    norms_applicable = bool(sections.get("methods") or sections.get("results"))
+    if norms_applicable:
+        for item, pattern in NORMS_ITEMS:
+            present = bool(re.search(pattern, all_text, re.IGNORECASE))
+            checks.append({"check": "norms_" + item, "status": "pass" if present else "warning",
+                           "detail": "reported" if present else "statement not found in the text"})
+            if not present:
+                findings.append(issue("academic_norms", "low", "full_text", 0, "",
+                                      "Required statement not found: %s." % item.replace("_", " "),
+                                      "no matching pattern in the supplied text",
+                                      "Add an explicit %s statement." % item.replace("_", " ")))
+
     unverifiable = []
     if not references:
         unverifiable.append({"item": "reference_metadata", "reason": "no reference list was supplied; citation existence cannot be checked"})
@@ -299,10 +353,18 @@ def build_payload(case, task_text):
     else:
         status = "success"
 
+    facet_counts = {}
+    for item in findings:
+        facet_counts[item["facet"]] = facet_counts.get(item["facet"], 0) + 1
+    for check in checks:
+        check["findings"] = facet_counts.get(FACET_OF_CHECK.get(check.get("check")), 0)
+    coverage = build_coverage(checks, findings, norms_applicable)
+
     result = {
         "document": {"sections_found": sorted(sections), "sentences": len(sentences(all_text)),
                      "references": ref_count, "fingerprint": hashlib.sha256(all_text.encode("utf-8")).hexdigest()[:16]},
         "checks": checks,
+        "coverage": coverage,
         "findings": findings,
         "summary": {"total": len(findings), "by_severity": severity_counts,
                     "facets_covered": sorted({item["facet"] for item in findings}),
@@ -327,6 +389,10 @@ def build_payload(case, task_text):
         "case_id": case_identifier(case),
         "status": status,
         "result": result,
+        "checks": checks,
+        "coverage": coverage,
+        "review_report": {"format": "markdown",
+                          "content": build_review_report(result, case_identifier(case), uncertainty)},
         "evidence": [{"kind": "finding", "locator": item["locator"], "quote": item["quote"], "severity": item["severity"]} for item in findings],
         "uncertainty": uncertainty,
         "errors": [],
@@ -447,6 +513,10 @@ def apply_contract(payload, case):
         if name in payload and payload[name] is not None:
             notes[name] = "produced directly by this run"
             continue
+        if name in flat and flat[name] not in (None, "", [], {}):
+            payload[name] = flat[name]
+            notes[name] = "taken from the run's result section"
+            continue
         value, reason = _derive_named(name, flat)
         if value is not None:
             payload[name] = value
@@ -472,6 +542,53 @@ def write_json(path, payload):
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
+
+
+def build_review_report(result, case_id, uncertainty=None):
+    """Render a complete review report (markdown) from this run's findings."""
+    findings = result.get("findings") or []
+    summary = result.get("summary") or {}
+    counts = summary.get("by_severity") or {}
+    sections = (result.get("document") or {}).get("sections_found") or []
+    lines = ["# 论文质量与结构审查报告", "",
+             "- case_id: `%s`" % (case_id or "unknown"),
+             "- 判定: %s" % (summary.get("verdict") or "no_verdict"),
+             "- 问题数: %d（high %d / medium %d / low %d）" % (
+                 len(findings), counts.get("high", 0), counts.get("medium", 0), counts.get("low", 0)),
+             "- 检测章节: %s" % ("、".join(sections) or "未识别"), ""]
+    lines += ["## 一、检查覆盖", "", "| 检查项 | 状态 | 问题数 |", "|---|---|---:|"]
+    for check in result.get("checks") or []:
+        lines.append("| %s | %s | %s |" % (check.get("check"), check.get("status"), check.get("findings", 0)))
+    lines += ["", "### 六类检查项覆盖", "", "| 类别 | 状态 | 问题数 |", "|---|---|---:|"]
+    for row in result.get("coverage") or []:
+        lines.append("| %s | %s | %s |" % (row.get("label"), row.get("status"), row.get("findings")))
+    lines += ["", "## 二、问题清单"]
+    if not findings:
+        lines += ["", "本次材料在已检查项上未发现问题；未检查项见第五节。"]
+    for index, item in enumerate(findings, 1):
+        lines += ["", "### F%d [%s] %s" % (index, item.get("severity", "unspecified"), item.get("facet", "finding")), "",
+                  "- 定位：`%s`" % (item.get("locator") or "未定位")]
+        if item.get("quote"):
+            lines.append("- 原文：“%s”" % item["quote"])
+        lines += ["- 判定：%s" % (item.get("finding") or ""),
+                  "- 依据：%s" % (item.get("evidence") or ""),
+                  "- 修改建议：%s" % (item.get("recommendation") or "")]
+    lines += ["", "## 三、修改清单"]
+    for index, item in enumerate(result.get("revision_checklist") or [], 1):
+        lines.append("%d. `%s` — %s" % (index, item.get("finding_locator") or item.get("locator") or "n/a", item.get("action") or ""))
+    lines += ["", "## 四、限制"]
+    for item in result.get("limitations") or []:
+        lines.append("- %s" % item)
+    lines += ["", "## 五、待复核与未检查项"]
+    for item in (uncertainty or []):
+        if isinstance(item, dict):
+            lines.append("- %s：%s" % (item.get("type", "uncertainty"), item.get("detail", "")))
+        else:
+            lines.append("- %s" % item)
+    lines += ["", "## 六、运行记录"]
+    for item in result.get("change_log") or []:
+        lines.append("- %s" % item)
+    return "\n".join(lines)
 
 
 def main(argv=None):
@@ -504,6 +621,13 @@ def main(argv=None):
     except Exception as exc:
         sys.stderr.write(json.dumps({"status": "failed", "stage": "write_output", "message": str(exc)[:300]}) + "\n")
         return 3
+    report = payload.get("review_report")
+    if isinstance(report, dict) and report.get("content"):
+        try:
+            with open(os.path.join(os.path.dirname(os.path.abspath(args.out)), "review-report.md"), "w", encoding="utf-8") as handle:
+                handle.write(report["content"])
+        except OSError:
+            pass
     sys.stdout.write(json.dumps({"status": payload.get("status"), "case_id": payload.get("case_id"),
                                  "out": str(args.out), "findings": payload.get("stats", {}).get("findings", 0)},
                                 ensure_ascii=False) + "\n")
